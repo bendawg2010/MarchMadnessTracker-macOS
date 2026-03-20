@@ -69,8 +69,10 @@ struct WatchView: View {
 
                 Divider().padding(.horizontal, 12)
 
-                // Individual live games
-                let liveGames = poller.games.filter { $0.isLive }
+                // Individual live games, ranked by excitement
+                let liveGames = poller.games.filter { $0.isLive }.sorted {
+                    gameExcitementScore($0) > gameExcitementScore($1)
+                }
                 let upcomingGames = poller.games.filter { $0.isScheduled }
 
                 if !liveGames.isEmpty {
@@ -121,6 +123,36 @@ struct WatchView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 4)
+    }
+
+    /// Score how exciting a game is — higher = better game to watch
+    private func gameExcitementScore(_ game: Event) -> Int {
+        var score = 0
+        if let diff = game.scoreDifference {
+            score += max(0, 20 - diff) * 3
+        }
+        if let awaySeed = game.awayCompetitor?.seed,
+           let homeSeed = game.homeCompetitor?.seed,
+           let awayScore = game.awayCompetitor?.scoreInt,
+           let homeScore = game.homeCompetitor?.scoreInt {
+            let seedDiff = abs(awaySeed - homeSeed)
+            if (awaySeed > homeSeed && awayScore > homeScore) ||
+               (homeSeed > awaySeed && homeScore > awayScore) {
+                score += seedDiff * 4
+            }
+        }
+        let round = game.roundName ?? ""
+        switch round {
+        case _ where round.contains("Championship"): score += 50
+        case _ where round.contains("Final Four"):    score += 40
+        case _ where round.contains("Elite"):         score += 30
+        case _ where round.contains("Sweet"):         score += 20
+        case _ where round.contains("2nd"):           score += 10
+        default:                                       score += 5
+        }
+        if game.status.period >= 3 { score += 25 }
+        else if game.status.period == 2 { score += 10 }
+        return score
     }
 
     private func watchGameRow(_ game: Event) -> some View {

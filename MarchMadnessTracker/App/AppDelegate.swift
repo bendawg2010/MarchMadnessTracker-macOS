@@ -268,19 +268,66 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let liveGames = poller.games.filter { $0.isLive }
-        let gamesToShow = Array(liveGames.prefix(4))
+        if liveGames.isEmpty { return }
 
-        if gamesToShow.isEmpty { return }
+        // Rank games by excitement: close score, upsets, later rounds
+        let ranked = liveGames.sorted { a, b in
+            gameExcitementScore(a) > gameExcitementScore(b)
+        }
+        let gamesToShow = Array(ranked.prefix(4))
 
         let streams: [(url: URL, title: String)] = gamesToShow.compactMap { game in
             let away = game.awayCompetitor?.team.abbreviation ?? "Away"
             let home = game.homeCompetitor?.team.abbreviation ?? "Home"
-            let url = URL(string: "https://www.ncaa.com/march-madness-live/watch")!
+            // Use ESPN game page for actual game content
+            let url = URL(string: "https://www.espn.com/mens-college-basketball/game/_/gameId/\(game.id)")!
             return (url: url, title: "\(away) vs \(home)")
         }
 
         let window = MultiviewWindow(urls: streams)
         multiviewWindow = window
+    }
+
+    /// Score how exciting a game is — higher = better game to watch
+    private func gameExcitementScore(_ game: Event) -> Int {
+        var score = 0
+
+        // Close games are more exciting (lower point diff = higher score)
+        if let diff = game.scoreDifference {
+            score += max(0, 20 - diff) * 3 // 0-pt game = 60, 5-pt game = 45, 20+ = 0
+        }
+
+        // Upsets are exciting (lower seed winning)
+        if let awaySeed = game.awayCompetitor?.seed,
+           let homeSeed = game.homeCompetitor?.seed,
+           let awayScore = game.awayCompetitor?.scoreInt,
+           let homeScore = game.homeCompetitor?.scoreInt {
+            let seedDiff = abs(awaySeed - homeSeed)
+            if (awaySeed > homeSeed && awayScore > homeScore) ||
+               (homeSeed > awaySeed && homeScore > awayScore) {
+                score += seedDiff * 4 // Big upset = big bonus
+            }
+        }
+
+        // Later rounds are more important
+        let round = game.roundName ?? ""
+        switch round {
+        case _ where round.contains("Championship"): score += 50
+        case _ where round.contains("Final Four"):    score += 40
+        case _ where round.contains("Elite"):         score += 30
+        case _ where round.contains("Sweet"):         score += 20
+        case _ where round.contains("2nd"):           score += 10
+        default:                                       score += 5
+        }
+
+        // Later in the game = more exciting (2nd half, OT)
+        if game.status.period >= 3 { // OT
+            score += 25
+        } else if game.status.period == 2 { // 2nd half
+            score += 10
+        }
+
+        return score
     }
 
     // MARK: - Ticker Size
