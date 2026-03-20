@@ -164,8 +164,6 @@ class ScorePoller {
     /// Write game data to App Group UserDefaults so WidgetKit can read it
     private func shareDataWithWidget() {
         let sharedGames: [SharedGame] = games.map { event in
-            let headline = event.notes?.first?.headline
-            let parts = headline?.components(separatedBy: " - ") ?? []
             return SharedGame(
                 id: event.id,
                 awayTeam: event.awayCompetitor?.team.displayName ?? "TBD",
@@ -186,8 +184,8 @@ class ScorePoller {
                 period: event.status.period,
                 displayClock: event.status.displayClock,
                 startDate: event.startDate,
-                roundName: parts.last?.trimmingCharacters(in: .whitespaces),
-                regionName: parts.count >= 2 ? parts[parts.count - 2].trimmingCharacters(in: .whitespaces) : nil,
+                roundName: event.roundName,
+                regionName: event.regionName,
                 broadcast: event.competition?.broadcasts?.first?.names?.first,
                 isUpset: event.isUpset
             )

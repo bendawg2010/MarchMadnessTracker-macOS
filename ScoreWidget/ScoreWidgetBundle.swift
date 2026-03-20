@@ -6,5 +6,6 @@ struct ScoreWidgetBundle: WidgetBundle {
     var body: some Widget {
         LiveScoreWidget()
         BracketWidget()
+        PlayerStatsWidget()
     }
 }

@@ -45,8 +45,15 @@ struct LiveScoreProvider: TimelineProvider {
             return response.events.map { event in
                 let away = event.competitions.first?.competitors.first { $0.homeAway == "away" }
                 let home = event.competitions.first?.competitors.first { $0.homeAway == "home" }
+                // Notes can be on event or competition level
                 let headline = event.notes?.first?.headline
+                    ?? event.competitions.first?.notes?.first?.headline
                 let parts = headline?.components(separatedBy: " - ") ?? []
+                var regionStr: String? = nil
+                if parts.count >= 2 {
+                    let r = parts[parts.count - 2].trimmingCharacters(in: .whitespaces)
+                    regionStr = r.replacingOccurrences(of: " Region", with: "")
+                }
 
                 return SharedGame(
                     id: event.id,
@@ -69,7 +76,7 @@ struct LiveScoreProvider: TimelineProvider {
                     displayClock: event.status.displayClock,
                     startDate: ISO8601DateFormatter().date(from: event.date),
                     roundName: parts.last?.trimmingCharacters(in: .whitespaces),
-                    regionName: parts.count >= 2 ? parts[parts.count - 2].trimmingCharacters(in: .whitespaces) : nil,
+                    regionName: regionStr,
                     broadcast: event.competitions.first?.broadcasts?.first?.names?.first,
                     isUpset: {
                         guard event.status.type.state != "pre",
@@ -105,6 +112,7 @@ private struct WidgetEvent: Codable {
 private struct WidgetCompetition: Codable {
     let competitors: [WidgetCompetitor]
     let broadcasts: [WidgetBroadcast]?
+    let notes: [WidgetNote]?
 }
 
 private struct WidgetCompetitor: Codable {

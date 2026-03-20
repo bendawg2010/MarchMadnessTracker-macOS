@@ -58,9 +58,19 @@ struct BracketProvider: TimelineProvider {
         let homeTeam = home?["team"] as? [String: Any]
         let awayRank = away?["curatedRank"] as? [String: Any]
         let homeRank = home?["curatedRank"] as? [String: Any]
-        let notes = event["notes"] as? [[String: Any]]
-        let headline = notes?.first?["headline"] as? String
+        // Notes can be on event OR competition level
+        let eventNotes = event["notes"] as? [[String: Any]]
+        let compNotes = comp["notes"] as? [[String: Any]]
+        let headline = eventNotes?.first?["headline"] as? String
+            ?? compNotes?.first?["headline"] as? String
         let parts = headline?.components(separatedBy: " - ") ?? []
+
+        // Extract region: "NCAA Men's Basketball Championship - South Region - 1st Round"
+        var regionStr: String? = nil
+        if parts.count >= 2 {
+            let r = parts[parts.count - 2].trimmingCharacters(in: .whitespaces)
+            regionStr = r.replacingOccurrences(of: " Region", with: "")
+        }
 
         return SharedGame(
             id: id,
@@ -83,7 +93,7 @@ struct BracketProvider: TimelineProvider {
             displayClock: status["displayClock"] as? String,
             startDate: nil,
             roundName: parts.last?.trimmingCharacters(in: .whitespaces),
-            regionName: parts.count >= 2 ? parts[parts.count - 2].trimmingCharacters(in: .whitespaces) : nil,
+            regionName: regionStr,
             broadcast: nil,
             isUpset: false
         )

@@ -47,15 +47,25 @@ struct Event: Codable, Identifiable {
         DateFormatters.espnISO.date(from: date)
     }
 
+    /// The tournament headline from either event notes or competition notes
+    /// ESPN puts it in competition.notes like: "NCAA Men's Basketball Championship - South Region - 1st Round"
+    private var bracketHeadline: String? {
+        if let h = notes?.first?.headline { return h }
+        return competition?.notes?.first?.headline
+    }
+
     var regionName: String? {
-        guard let headline = notes?.first?.headline else { return nil }
+        guard let headline = bracketHeadline else { return nil }
         let parts = headline.components(separatedBy: " - ")
         guard parts.count >= 2 else { return nil }
-        return parts[parts.count - 2].trimmingCharacters(in: .whitespaces)
+        // The region is the second-to-last part: "... - South Region - 1st Round"
+        let region = parts[parts.count - 2].trimmingCharacters(in: .whitespaces)
+        // Strip "Region" suffix if present: "South Region" -> "South"
+        return region.replacingOccurrences(of: " Region", with: "")
     }
 
     var roundName: String? {
-        guard let headline = notes?.first?.headline else { return nil }
+        guard let headline = bracketHeadline else { return nil }
         let parts = headline.components(separatedBy: " - ")
         return parts.last?.trimmingCharacters(in: .whitespaces)
     }
@@ -66,6 +76,7 @@ struct Competition: Codable {
     let competitors: [Competitor]
     let venue: Venue?
     let broadcasts: [Broadcast]?
+    let notes: [Note]?
 }
 
 struct Competitor: Codable {
