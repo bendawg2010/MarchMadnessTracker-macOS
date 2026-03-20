@@ -5,37 +5,66 @@ import SwiftUI
 
 struct LiveScoreProvider: TimelineProvider {
     func placeholder(in context: Context) -> ScoreEntry {
-        ScoreEntry(date: Date(), games: sampleGames)
+        ScoreEntry(date: Date(), games: sampleGames, logoCache: [:])
     }
 
     func getSnapshot(in context: Context, completion: @escaping (ScoreEntry) -> Void) {
         if context.isPreview {
-            completion(ScoreEntry(date: Date(), games: sampleGames))
-            return
+            completion(ScoreEntry(date: Date(), games: sampleGames, logoCache: [:])); return
         }
         Task {
             let games = await fetchLiveScores()
-            completion(ScoreEntry(date: Date(), games: games))
+            let logos = await downloadLogos(for: games)
+            completion(ScoreEntry(date: Date(), games: games, logoCache: logos))
         }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ScoreEntry>) -> Void) {
         Task {
             let games = await fetchLiveScores()
-            let entry = ScoreEntry(date: Date(), games: games.isEmpty ? sampleGames : games)
+            let finalGames = games.isEmpty ? sampleGames : games
+            let logos = await downloadLogos(for: finalGames)
+            let entry = ScoreEntry(date: Date(), games: finalGames, logoCache: logos)
             let hasLive = games.contains { $0.isLive }
-            let refreshDate = Calendar.current.date(
-                byAdding: .minute,
-                value: hasLive ? 1 : 5,
-                to: Date()
-            )!
-            let timeline = Timeline(entries: [entry], policy: .after(refreshDate))
-            completion(timeline)
+            let refreshDate = Calendar.current.date(byAdding: .minute, value: hasLive ? 1 : 5, to: Date())!
+            completion(Timeline(entries: [entry], policy: .after(refreshDate)))
         }
     }
 
+    /// Download all team logos and return as [url_string: Data]
+    private func downloadLogos(for games: [SharedGame]) async -> [String: Data] {
+        var cache: [String: Data] = [:]
+        var urls: Set<String> = []
+
+        for game in games {
+            if let u = game.awayLogo { urls.insert(u) }
+            if let u = game.homeLogo { urls.insert(u) }
+        }
+
+        await withTaskGroup(of: (String, Data?).self) { group in
+            for urlString in urls {
+                group.addTask {
+                    guard let url = URL(string: urlString) else { return (urlString, nil) }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: url)
+                        return (urlString, data)
+                    } catch {
+                        return (urlString, nil)
+                    }
+                }
+            }
+            for await (urlString, data) in group {
+                if let data = data {
+                    cache[urlString] = data
+                }
+            }
+        }
+
+        return cache
+    }
+
     private func fetchLiveScores() async -> [SharedGame] {
-        guard let url = URL(string: "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=100") else {
+        guard let url = URL(string: "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=100&limit=100") else {
             return sampleGames
         }
 
@@ -45,7 +74,6 @@ struct LiveScoreProvider: TimelineProvider {
             return response.events.map { event in
                 let away = event.competitions.first?.competitors.first { $0.homeAway == "away" }
                 let home = event.competitions.first?.competitors.first { $0.homeAway == "home" }
-                // Notes can be on event or competition level
                 let headline = event.notes?.first?.headline
                     ?? event.competitions.first?.notes?.first?.headline
                 let parts = headline?.components(separatedBy: " - ") ?? []
@@ -159,6 +187,7 @@ private struct WidgetBroadcast: Codable {
 struct ScoreEntry: TimelineEntry {
     let date: Date
     let games: [SharedGame]
+    let logoCache: [String: Data]  // url -> image data
 
     var liveGames: [SharedGame] { games.filter { $0.isLive } }
     var recentGames: [SharedGame] {
@@ -167,6 +196,11 @@ struct ScoreEntry: TimelineEntry {
         let finals = games.filter { $0.isFinal }
         if !finals.isEmpty { return Array(finals.prefix(4)) }
         return Array(games.prefix(4))
+    }
+
+    func logoImage(for urlString: String?) -> NSImage? {
+        guard let urlString, let data = logoCache[urlString] else { return nil }
+        return NSImage(data: data)
     }
 }
 
@@ -181,7 +215,7 @@ struct LiveScoreWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("March Madness Scores")
-        .description("Live NCAA Tournament scores")
+        .description("Live NCAA Tournament scores with team logos")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -210,41 +244,30 @@ struct LiveScoreWidgetView: View {
     private var smallWidget: some View {
         VStack(spacing: 6) {
             if let game = entry.recentGames.first {
-                // Header
                 HStack {
                     if game.isLive {
                         HStack(spacing: 3) {
                             Circle().fill(.red).frame(width: 5, height: 5)
-                            Text("LIVE")
-                                .font(.system(size: 8, weight: .heavy))
-                                .foregroundStyle(.red)
+                            Text("LIVE").font(.system(size: 8, weight: .heavy)).foregroundStyle(.red)
                         }
                     }
                     Spacer()
                     if let round = game.roundName {
-                        Text(round)
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        Text(round).font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
 
                 Spacer()
 
-                // Teams + Scores
                 HStack(spacing: 0) {
                     // Away
                     VStack(spacing: 3) {
-                        widgetLogo(game.awayLogo, color: game.awayColor, size: 28)
+                        teamLogo(game.awayLogo, color: game.awayColor, size: 28)
                         HStack(spacing: 2) {
                             if let seed = game.awaySeed {
-                                Text("\(seed)")
-                                    .font(.system(size: 8, weight: .medium))
-                                    .foregroundStyle(.secondary)
+                                Text("\(seed)").font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
                             }
-                            Text(game.awayAbbreviation)
-                                .font(.system(size: 11, weight: .semibold))
-                                .lineLimit(1)
+                            Text(game.awayAbbreviation).font(.system(size: 11, weight: .semibold)).lineLimit(1)
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -253,40 +276,27 @@ struct LiveScoreWidgetView: View {
                     VStack(spacing: 2) {
                         if game.isLive || game.isFinal {
                             HStack(spacing: 4) {
-                                Text(game.awayScore)
-                                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                                Text("-")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(.secondary)
-                                Text(game.homeScore)
-                                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                                Text(game.awayScore).font(.system(size: 22, weight: .bold, design: .rounded))
+                                Text("-").font(.system(size: 14)).foregroundStyle(.secondary)
+                                Text(game.homeScore).font(.system(size: 22, weight: .bold, design: .rounded))
                             }
                         }
                         if game.isLive {
-                            Text(game.shortDetail ?? "Live")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.red)
+                            Text(game.shortDetail ?? "Live").font(.system(size: 9, weight: .bold)).foregroundStyle(.red)
                         } else if game.isFinal {
-                            Text("Final")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
+                            Text("Final").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                         } else {
-                            Text(game.detail ?? "Upcoming")
-                                .font(.system(size: 11, weight: .semibold))
+                            Text(game.detail ?? "Upcoming").font(.system(size: 11, weight: .semibold))
                         }
                     }
 
                     // Home
                     VStack(spacing: 3) {
-                        widgetLogo(game.homeLogo, color: game.homeColor, size: 28)
+                        teamLogo(game.homeLogo, color: game.homeColor, size: 28)
                         HStack(spacing: 2) {
-                            Text(game.homeAbbreviation)
-                                .font(.system(size: 11, weight: .semibold))
-                                .lineLimit(1)
+                            Text(game.homeAbbreviation).font(.system(size: 11, weight: .semibold)).lineLimit(1)
                             if let seed = game.homeSeed {
-                                Text("\(seed)")
-                                    .font(.system(size: 8, weight: .medium))
-                                    .foregroundStyle(.secondary)
+                                Text("\(seed)").font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -295,13 +305,10 @@ struct LiveScoreWidgetView: View {
 
                 Spacer()
 
-                // Upset badge
                 if game.isUpset {
                     HStack(spacing: 2) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 7))
-                        Text("UPSET")
-                            .font(.system(size: 7, weight: .heavy))
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 7))
+                        Text("UPSET").font(.system(size: 7, weight: .heavy))
                     }
                     .foregroundStyle(.orange)
                 }
@@ -312,76 +319,57 @@ struct LiveScoreWidgetView: View {
         .padding(4)
     }
 
-    // MARK: - Medium Widget (2-3 games)
+    // MARK: - Medium Widget
 
     private var mediumWidget: some View {
         VStack(spacing: 4) {
-            // Title bar
             HStack {
-                Image(systemName: "basketball.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-                Text("March Madness")
-                    .font(.system(size: 11, weight: .bold))
+                Image(systemName: "basketball.fill").font(.system(size: 10)).foregroundStyle(.orange)
+                Text("March Madness").font(.system(size: 11, weight: .bold))
                 Spacer()
                 if entry.liveGames.count > 0 {
                     HStack(spacing: 3) {
                         Circle().fill(.red).frame(width: 5, height: 5)
-                        Text("\(entry.liveGames.count) LIVE")
-                            .font(.system(size: 8, weight: .heavy))
-                            .foregroundStyle(.red)
+                        Text("\(entry.liveGames.count) LIVE").font(.system(size: 8, weight: .heavy)).foregroundStyle(.red)
                     }
                 }
             }
 
             if entry.recentGames.isEmpty {
-                Spacer()
-                emptyState
-                Spacer()
+                Spacer(); emptyState; Spacer()
             } else {
                 ForEach(Array(entry.recentGames.prefix(3))) { game in
                     compactGameRow(game)
-                    if game.id != entry.recentGames.prefix(3).last?.id {
-                        Divider()
-                    }
+                    if game.id != entry.recentGames.prefix(3).last?.id { Divider() }
                 }
             }
         }
         .padding(4)
     }
 
-    // MARK: - Large Widget (many games)
+    // MARK: - Large Widget
 
     private var largeWidget: some View {
         VStack(spacing: 4) {
             HStack {
-                Image(systemName: "basketball.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.orange)
-                Text("March Madness")
-                    .font(.system(size: 13, weight: .bold))
+                Image(systemName: "basketball.fill").font(.system(size: 12)).foregroundStyle(.orange)
+                Text("March Madness").font(.system(size: 13, weight: .bold))
                 Spacer()
                 if entry.liveGames.count > 0 {
                     HStack(spacing: 3) {
                         Circle().fill(.red).frame(width: 6, height: 6)
-                        Text("\(entry.liveGames.count) LIVE")
-                            .font(.system(size: 9, weight: .heavy))
-                            .foregroundStyle(.red)
+                        Text("\(entry.liveGames.count) LIVE").font(.system(size: 9, weight: .heavy)).foregroundStyle(.red)
                     }
                 }
             }
             .padding(.bottom, 2)
 
             if entry.recentGames.isEmpty {
-                Spacer()
-                emptyState
-                Spacer()
+                Spacer(); emptyState; Spacer()
             } else {
                 ForEach(Array(entry.recentGames.prefix(6))) { game in
                     expandedGameRow(game)
-                    if game.id != entry.recentGames.prefix(6).last?.id {
-                        Divider()
-                    }
+                    if game.id != entry.recentGames.prefix(6).last?.id { Divider() }
                 }
                 Spacer(minLength: 0)
             }
@@ -393,53 +381,34 @@ struct LiveScoreWidgetView: View {
 
     private func compactGameRow(_ game: SharedGame) -> some View {
         HStack(spacing: 6) {
-            if game.isLive {
-                Circle().fill(.red).frame(width: 4, height: 4)
-            }
+            if game.isLive { Circle().fill(.red).frame(width: 4, height: 4) }
 
-            // Away
-            widgetLogo(game.awayLogo, color: game.awayColor, size: 16)
+            teamLogo(game.awayLogo, color: game.awayColor, size: 16)
             if let seed = game.awaySeed {
-                Text("\(seed)")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text("\(seed)").font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
             }
-            Text(game.awayAbbreviation)
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .frame(width: 36, alignment: .leading)
+            Text(game.awayAbbreviation).font(.system(size: 12, weight: .semibold)).lineLimit(1).frame(width: 36, alignment: .leading)
 
             Spacer()
 
-            // Score/Time
             if game.isLive || game.isFinal {
                 Text("\(game.awayScore) - \(game.homeScore)")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(game.isLive ? .red : .primary)
             } else {
-                Text(game.shortDetail ?? "—")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text(game.shortDetail ?? "—").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            // Home
-            Text(game.homeAbbreviation)
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .frame(width: 36, alignment: .trailing)
+            Text(game.homeAbbreviation).font(.system(size: 12, weight: .semibold)).lineLimit(1).frame(width: 36, alignment: .trailing)
             if let seed = game.homeSeed {
-                Text("\(seed)")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text("\(seed)").font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
             }
-            widgetLogo(game.homeLogo, color: game.homeColor, size: 16)
+            teamLogo(game.homeLogo, color: game.homeColor, size: 16)
 
             if game.isUpset {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.orange)
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8)).foregroundStyle(.orange)
             }
         }
         .padding(.vertical, 2)
@@ -447,28 +416,20 @@ struct LiveScoreWidgetView: View {
 
     private func expandedGameRow(_ game: SharedGame) -> some View {
         HStack(spacing: 8) {
-            // Live indicator
-            if game.isLive {
-                Circle().fill(.red).frame(width: 5, height: 5)
-            }
+            if game.isLive { Circle().fill(.red).frame(width: 5, height: 5) }
 
-            // Away team
-            widgetLogo(game.awayLogo, color: game.awayColor, size: 20)
+            teamLogo(game.awayLogo, color: game.awayColor, size: 20)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 3) {
                     if let seed = game.awaySeed {
-                        Text("(\(seed))")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
+                        Text("(\(seed))").font(.system(size: 8)).foregroundStyle(.secondary)
                     }
-                    Text(game.awayAbbreviation)
-                        .font(.system(size: 12, weight: .semibold))
+                    Text(game.awayAbbreviation).font(.system(size: 12, weight: .semibold))
                 }
             }
 
             Spacer()
 
-            // Score block
             VStack(spacing: 1) {
                 if game.isLive || game.isFinal {
                     Text("\(game.awayScore) - \(game.homeScore)")
@@ -476,43 +437,31 @@ struct LiveScoreWidgetView: View {
                         .foregroundStyle(game.isLive ? .red : .primary)
                 }
                 if game.isLive {
-                    Text(game.shortDetail ?? "Live")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.red)
+                    Text(game.shortDetail ?? "Live").font(.system(size: 8, weight: .bold)).foregroundStyle(.red)
                 } else if game.isFinal {
-                    Text("Final")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                    Text("Final").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
                 } else {
-                    Text(game.shortDetail ?? "—")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
+                    Text(game.shortDetail ?? "—").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                 }
             }
             .frame(minWidth: 70)
 
             Spacer()
 
-            // Home team
             VStack(alignment: .trailing, spacing: 0) {
                 HStack(spacing: 3) {
-                    Text(game.homeAbbreviation)
-                        .font(.system(size: 12, weight: .semibold))
+                    Text(game.homeAbbreviation).font(.system(size: 12, weight: .semibold))
                     if let seed = game.homeSeed {
-                        Text("(\(seed))")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
+                        Text("(\(seed))").font(.system(size: 8)).foregroundStyle(.secondary)
                     }
                 }
             }
-            widgetLogo(game.homeLogo, color: game.homeColor, size: 20)
+            teamLogo(game.homeLogo, color: game.homeColor, size: 20)
 
             if game.isUpset {
                 HStack(spacing: 2) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 7))
-                    Text("!")
-                        .font(.system(size: 7, weight: .heavy))
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 7))
+                    Text("!").font(.system(size: 7, weight: .heavy))
                 }
                 .foregroundStyle(.orange)
             }
@@ -520,20 +469,19 @@ struct LiveScoreWidgetView: View {
         .padding(.vertical, 2)
     }
 
-    // MARK: - Helpers
+    // MARK: - Team Logo (uses pre-downloaded image data)
 
-    private func widgetLogo(_ urlString: String?, color: String?, size: CGFloat) -> some View {
+    private func teamLogo(_ urlString: String?, color: String?, size: CGFloat) -> some View {
         ZStack {
             if let hex = color {
                 Circle()
                     .fill(Color(hex: hex)?.opacity(0.15) ?? Color.gray.opacity(0.15))
                     .frame(width: size + 4, height: size + 4)
             }
-            if let urlString, let url = URL(string: urlString) {
-                // Note: AsyncImage doesn't work in widgets — we show a fallback
-                Image(systemName: "basketball.fill")
-                    .font(.system(size: size * 0.6))
-                    .foregroundStyle(.secondary)
+            if let nsImage = entry.logoImage(for: urlString) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
                     .frame(width: size, height: size)
             } else {
                 Image(systemName: "basketball.fill")
@@ -546,12 +494,8 @@ struct LiveScoreWidgetView: View {
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Image(systemName: "basketball")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text("No games right now")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Image(systemName: "basketball").font(.title3).foregroundStyle(.secondary)
+            Text("No games right now").font(.caption).foregroundStyle(.secondary)
         }
     }
 }
