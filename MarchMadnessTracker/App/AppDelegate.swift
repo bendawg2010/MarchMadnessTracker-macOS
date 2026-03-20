@@ -252,8 +252,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Try ESPN watch page for the specific game
-        let url = URL(string: "https://www.espn.com/mens-college-basketball/game/_/gameId/\(event.id)")!
+        // Use NCAA March Madness Live free stream
+        let url = URL(string: "https://www.ncaa.com/march-madness-live/game/\(event.id)")!
         let away = event.awayCompetitor?.team.abbreviation ?? "Away"
         let home = event.homeCompetitor?.team.abbreviation ?? "Home"
         let window = WatchGameWindow(url: url, title: "📺 \(away) vs \(home)")
@@ -279,8 +279,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let streams: [(url: URL, title: String)] = gamesToShow.compactMap { game in
             let away = game.awayCompetitor?.team.abbreviation ?? "Away"
             let home = game.homeCompetitor?.team.abbreviation ?? "Home"
-            // Use ESPN game page for actual game content
-            let url = URL(string: "https://www.espn.com/mens-college-basketball/game/_/gameId/\(game.id)")!
+            // Use NCAA March Madness Live free stream
+            let url = URL(string: "https://www.ncaa.com/march-madness-live/game/\(game.id)")!
             return (url: url, title: "\(away) vs \(home)")
         }
 
