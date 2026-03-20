@@ -105,11 +105,13 @@ struct BracketEntry: TimelineEntry {
 // MARK: - Widget
 
 struct BracketWidget: Widget {
-    let kind = "BracketWidget"
+    let kind = "BracketWidget_v4"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: BracketProvider()) { entry in
             BracketWidgetView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) {
+                    Color(white: 0.15)
+                }
         }
         .configurationDisplayName("Tournament Bracket")
         .description("Live NCAA bracket with all 4 regions, scores & matchup lines")

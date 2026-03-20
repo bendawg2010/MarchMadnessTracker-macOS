@@ -124,12 +124,14 @@ struct PlayerStatsEntry: TimelineEntry {
 // MARK: - Widget Definition
 
 struct PlayerStatsWidget: Widget {
-    let kind: String = "PlayerStatsWidget"
+    let kind: String = "PlayerStatsWidget_v4"
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: PlayerStatsProvider()) { entry in
             PlayerStatsWidgetView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) {
+                    Color(white: 0.15)
+                }
         }
         .configurationDisplayName("Player Stats")
         .description("Top performers with bar graph leaderboards — points, rebounds, assists, steals, blocks")

@@ -207,12 +207,14 @@ struct ScoreEntry: TimelineEntry {
 // MARK: - Widget Definition
 
 struct LiveScoreWidget: Widget {
-    let kind: String = "LiveScoreWidget"
+    let kind: String = "LiveScoreWidget_v4"
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: LiveScoreProvider()) { entry in
             LiveScoreWidgetView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+                .containerBackground(for: .widget) {
+                    Color(white: 0.15)
+                }
         }
         .configurationDisplayName("March Madness Scores")
         .description("Live NCAA Tournament scores with team logos")
