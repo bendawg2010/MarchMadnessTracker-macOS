@@ -10,8 +10,7 @@ struct PlayerStatsProvider: TimelineProvider {
 
     func getSnapshot(in context: Context, completion: @escaping (PlayerStatsEntry) -> Void) {
         if context.isPreview {
-            completion(PlayerStatsEntry(date: Date(), topPerformers: samplePerformers))
-            return
+            completion(PlayerStatsEntry(date: Date(), topPerformers: samplePerformers)); return
         }
         Task {
             let performers = await fetchTopPerformers()
@@ -58,9 +57,7 @@ struct PlayerStatsProvider: TimelineProvider {
 
                     let teamAbbr = team["abbreviation"] as? String ?? "?"
                     let teamColor = team["color"] as? String
-                    let teamLogo = team["logo"] as? String
 
-                    // Get each stat leader
                     for leader in leaders {
                         guard let statName = leader["name"] as? String,
                               let leaderList = leader["leaders"] as? [[String: Any]],
@@ -69,18 +66,14 @@ struct PlayerStatsProvider: TimelineProvider {
                               let displayValue = topLeader["displayValue"] as? String,
                               let value = topLeader["value"] as? Double else { continue }
 
-                        // Skip "rating" stat - it's a composite
                         if statName == "rating" { continue }
 
                         let playerName = athlete["shortName"] as? String ?? "Unknown"
-                        let headshot = athlete["headshot"] as? String
 
                         performers.append(TopPerformer(
                             playerName: playerName,
                             teamAbbreviation: teamAbbr,
                             teamColor: teamColor,
-                            teamLogo: teamLogo,
-                            headshotURL: headshot,
                             statName: statName,
                             statDisplayName: leader["shortDisplayName"] as? String ?? statName,
                             statValue: displayValue,
@@ -91,21 +84,7 @@ struct PlayerStatsProvider: TimelineProvider {
                 }
             }
 
-            // Sort by stat value (highest first), grouping by stat type
-            // Return top scorers, rebounders, and assist leaders
-            let scorers = performers.filter { $0.statName == "points" }.sorted { $0.statNumeric > $1.statNumeric }
-            let rebounders = performers.filter { $0.statName == "rebounds" }.sorted { $0.statNumeric > $1.statNumeric }
-            let assisters = performers.filter { $0.statName == "assists" }.sorted { $0.statNumeric > $1.statNumeric }
-
-            // Interleave: top scorer, top rebounder, top assister, repeat
-            var result: [TopPerformer] = []
-            let maxCount = max(scorers.count, rebounders.count, assisters.count)
-            for i in 0..<maxCount {
-                if i < scorers.count { result.append(scorers[i]) }
-                if i < rebounders.count { result.append(rebounders[i]) }
-                if i < assisters.count { result.append(assisters[i]) }
-            }
-            return result
+            return performers
         } catch {
             return []
         }
@@ -119,8 +98,6 @@ struct TopPerformer: Identifiable {
     let playerName: String
     let teamAbbreviation: String
     let teamColor: String?
-    let teamLogo: String?
-    let headshotURL: String?
     let statName: String
     let statDisplayName: String
     let statValue: String
@@ -133,6 +110,15 @@ struct PlayerStatsEntry: TimelineEntry {
     let topPerformers: [TopPerformer]
 
     var hasLive: Bool { topPerformers.contains { $0.isLive } }
+
+    func top(_ stat: String, count: Int = 5) -> [TopPerformer] {
+        Array(topPerformers.filter { $0.statName == stat }.sorted { $0.statNumeric > $1.statNumeric }.prefix(count))
+    }
+
+    /// Maximum value for a stat category (for bar graph scaling)
+    func maxValue(_ stat: String) -> Double {
+        topPerformers.filter { $0.statName == stat }.map { $0.statNumeric }.max() ?? 1
+    }
 }
 
 // MARK: - Widget Definition
@@ -146,10 +132,30 @@ struct PlayerStatsWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("Player Stats")
-        .description("Top performers in March Madness — points, rebounds, assists")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        .description("Top performers with bar graph leaderboards — points, rebounds, assists, steals, blocks")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
     }
 }
+
+// MARK: - Stat category config
+
+private struct StatCategory {
+    let key: String
+    let label: String
+    let icon: String
+    let color: Color
+}
+
+private let allStats: [StatCategory] = [
+    StatCategory(key: "points", label: "PTS", icon: "flame.fill", color: .orange),
+    StatCategory(key: "rebounds", label: "REB", icon: "arrow.up.circle.fill", color: .green),
+    StatCategory(key: "assists", label: "AST", icon: "arrow.right.circle.fill", color: .purple),
+    StatCategory(key: "steals", label: "STL", icon: "hand.raised.fill", color: .cyan),
+    StatCategory(key: "blocks", label: "BLK", icon: "shield.fill", color: .red),
+    StatCategory(key: "fieldGoalPct", label: "FG%", icon: "target", color: .blue),
+    StatCategory(key: "threePointFieldGoalPct", label: "3P%", icon: "scope", color: .mint),
+    StatCategory(key: "freeThrowPct", label: "FT%", icon: "circle.dotted", color: .yellow),
+]
 
 // MARK: - Widget View
 
@@ -163,252 +169,333 @@ struct PlayerStatsWidgetView: View {
             smallView
         case .systemMedium:
             mediumView
+        case .systemExtraLarge:
+            extraLargeView
         default:
             largeView
         }
     }
 
-    // MARK: - Small: Top scorer only
+    // MARK: - Small: Top scorer with big number
 
     private var smallView: some View {
         VStack(spacing: 4) {
             HStack(spacing: 4) {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.orange)
-                Text("Top Performer")
-                    .font(.system(size: 9, weight: .bold))
-                Spacer()
-            }
-
-            if let top = entry.topPerformers.first(where: { $0.statName == "points" }) {
-                Spacer(minLength: 0)
-                playerCard(top, size: .small)
-                Spacer(minLength: 0)
-            } else {
-                Spacer()
-                Text("No games")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-        }
-        .padding(8)
-    }
-
-    // MARK: - Medium: Top 3 stat leaders
-
-    private var mediumView: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.blue)
-                Text("March Madness Leaders")
-                    .font(.system(size: 10, weight: .bold))
+                Image(systemName: "flame.fill").font(.system(size: 9)).foregroundStyle(.orange)
+                Text("Top Scorer").font(.system(size: 9, weight: .bold))
                 Spacer()
                 if entry.hasLive {
                     HStack(spacing: 2) {
                         Circle().fill(.red).frame(width: 4, height: 4)
-                        Text("LIVE")
-                            .font(.system(size: 7, weight: .heavy))
-                            .foregroundStyle(.red)
+                        Text("LIVE").font(.system(size: 6, weight: .heavy)).foregroundStyle(.red)
                     }
                 }
             }
 
-            HStack(spacing: 6) {
-                // Top scorer
-                if let scorer = entry.topPerformers.first(where: { $0.statName == "points" }) {
-                    statColumn(scorer, icon: "flame.fill", color: .orange)
+            if let top = entry.top("points", count: 1).first {
+                Spacer(minLength: 0)
+                Text(top.statValue)
+                    .font(.system(size: 36, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.orange)
+                Text("POINTS")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+                Text(top.playerName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                HStack(spacing: 3) {
+                    teamDot(top.teamColor)
+                    Text(top.teamAbbreviation).font(.system(size: 9)).foregroundStyle(.secondary)
+                    if top.isLive { Circle().fill(.red).frame(width: 4, height: 4) }
                 }
-                // Top rebounder
-                if let rebounder = entry.topPerformers.first(where: { $0.statName == "rebounds" }) {
-                    statColumn(rebounder, icon: "arrow.up.circle.fill", color: .green)
+                Spacer(minLength: 0)
+
+                // Mini bar graph of top 3 scorers
+                let top3 = entry.top("points", count: 3)
+                if top3.count > 1 {
+                    HStack(spacing: 2) {
+                        ForEach(top3) { p in
+                            miniBar(value: p.statNumeric, max: entry.maxValue("points"), color: .orange, label: p.teamAbbreviation)
+                        }
+                    }
+                    .frame(height: 20)
                 }
-                // Top assists
-                if let assister = entry.topPerformers.first(where: { $0.statName == "assists" }) {
-                    statColumn(assister, icon: "arrow.right.circle.fill", color: .purple)
-                }
+            } else {
+                Spacer()
+                Text("No games").font(.caption).foregroundStyle(.secondary)
+                Spacer()
             }
         }
         .padding(8)
     }
 
-    // MARK: - Large: Full leaderboard
+    // MARK: - Medium: 3 stat categories with bar graphs
 
-    private var largeView: some View {
+    private var mediumView: some View {
         VStack(spacing: 4) {
             HStack(spacing: 4) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.blue)
-                Text("March Madness Player Stats")
-                    .font(.system(size: 11, weight: .bold))
+                Image(systemName: "chart.bar.fill").font(.system(size: 10)).foregroundStyle(.blue)
+                Text("March Madness Leaders").font(.system(size: 10, weight: .bold))
+                Spacer()
+                if entry.hasLive {
+                    HStack(spacing: 2) {
+                        Circle().fill(.red).frame(width: 4, height: 4)
+                        Text("LIVE").font(.system(size: 7, weight: .heavy)).foregroundStyle(.red)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                ForEach(allStats.prefix(3), id: \.key) { stat in
+                    statBarColumn(stat, count: 3)
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .padding(8)
+    }
+
+    // MARK: - Large: 5 stat categories with full bar graph leaderboards
+
+    private var largeView: some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: "chart.bar.fill").font(.system(size: 10)).foregroundStyle(.blue)
+                Text("March Madness Stats").font(.system(size: 11, weight: .bold))
                 Spacer()
                 if entry.hasLive {
                     HStack(spacing: 2) {
                         Circle().fill(.red).frame(width: 5, height: 5)
-                        Text("LIVE")
-                            .font(.system(size: 8, weight: .heavy))
-                            .foregroundStyle(.red)
+                        Text("LIVE").font(.system(size: 8, weight: .heavy)).foregroundStyle(.red)
                     }
                 }
             }
             .padding(.bottom, 2)
 
-            // Scoring leaders
-            statSection(
-                title: "Scoring",
-                icon: "flame.fill",
-                color: .orange,
-                performers: Array(entry.topPerformers.filter { $0.statName == "points" }.prefix(5))
-            )
-
-            Divider()
-
-            // Rebound leaders
-            statSection(
-                title: "Rebounds",
-                icon: "arrow.up.circle.fill",
-                color: .green,
-                performers: Array(entry.topPerformers.filter { $0.statName == "rebounds" }.prefix(5))
-            )
-
-            Divider()
-
-            // Assist leaders
-            statSection(
-                title: "Assists",
-                icon: "arrow.right.circle.fill",
-                color: .purple,
-                performers: Array(entry.topPerformers.filter { $0.statName == "assists" }.prefix(5))
-            )
+            ForEach(Array(allStats.prefix(5).enumerated()), id: \.element.key) { idx, stat in
+                if idx > 0 { Divider().padding(.horizontal, 4) }
+                barGraphSection(stat, count: 3)
+            }
 
             Spacer(minLength: 0)
         }
         .padding(8)
     }
 
-    // MARK: - Components
+    // MARK: - Extra Large: All 8 stats in 2 columns with full graphs
 
-    private func playerCard(_ performer: TopPerformer, size: CardSize) -> some View {
-        VStack(spacing: 4) {
-            Text(performer.statValue)
-                .font(.system(size: size == .small ? 28 : 20, weight: .heavy, design: .rounded))
-                .foregroundStyle(colorForStat(performer.statName))
+    private var extraLargeView: some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: "chart.bar.fill").font(.system(size: 12)).foregroundStyle(.blue)
+                Text("March Madness Player Statistics").font(.system(size: 12, weight: .bold))
+                Spacer()
+                if entry.hasLive {
+                    HStack(spacing: 3) {
+                        Circle().fill(.red).frame(width: 5, height: 5)
+                        Text("LIVE").font(.system(size: 9, weight: .heavy)).foregroundStyle(.red)
+                    }
+                }
+            }
+            .padding(.bottom, 4)
 
-            Text(performer.statDisplayName.uppercased())
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                // Left column
+                VStack(spacing: 6) {
+                    ForEach(Array(allStats.prefix(4).enumerated()), id: \.element.key) { idx, stat in
+                        if idx > 0 { Divider() }
+                        barGraphSection(stat, count: 5)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity)
 
-            Text(performer.playerName)
-                .font(.system(size: size == .small ? 12 : 10, weight: .semibold))
-                .lineLimit(1)
+                // Right column
+                VStack(spacing: 6) {
+                    ForEach(Array(allStats.dropFirst(4).prefix(4).enumerated()), id: \.element.key) { idx, stat in
+                        if idx > 0 { Divider() }
+                        barGraphSection(stat, count: 5)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(8)
+    }
 
+    // MARK: - Bar Graph Section (horizontal bars with player names)
+
+    private func barGraphSection(_ stat: StatCategory, count: Int) -> some View {
+        let players = entry.top(stat.key, count: count)
+        let maxVal = entry.maxValue(stat.key)
+
+        return VStack(spacing: 2) {
+            // Header
             HStack(spacing: 3) {
-                teamColorDot(performer.teamColor)
-                Text(performer.teamAbbreviation)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                if performer.isLive {
-                    Circle().fill(.red).frame(width: 4, height: 4)
+                Image(systemName: stat.icon).font(.system(size: 8)).foregroundStyle(stat.color)
+                Text(stat.label).font(.system(size: 8, weight: .heavy)).foregroundStyle(stat.color)
+                Spacer()
+            }
+
+            if players.isEmpty {
+                Text("No data").font(.system(size: 7)).foregroundStyle(.tertiary).padding(.vertical, 2)
+            } else {
+                ForEach(Array(players.enumerated()), id: \.element.id) { idx, player in
+                    barGraphRow(player: player, rank: idx + 1, maxVal: maxVal, color: stat.color)
                 }
             }
         }
     }
 
-    private func statColumn(_ performer: TopPerformer, icon: String, color: Color) -> some View {
-        VStack(spacing: 3) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundStyle(color)
+    private func barGraphRow(player: TopPerformer, rank: Int, maxVal: Double, color: Color) -> some View {
+        HStack(spacing: 3) {
+            // Rank
+            Text("\(rank)")
+                .font(.system(size: 7, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 8)
 
-            Text(performer.statValue)
-                .font(.system(size: 18, weight: .heavy, design: .rounded))
-                .foregroundStyle(color)
+            // Team dot
+            teamDot(player.teamColor)
 
-            Text(performer.statDisplayName.uppercased())
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(.secondary)
-
-            Text(performer.playerName)
-                .font(.system(size: 9, weight: .semibold))
+            // Player name + team
+            Text(player.playerName)
+                .font(.system(size: 8, weight: .medium))
                 .lineLimit(1)
+                .frame(width: 55, alignment: .leading)
 
-            HStack(spacing: 2) {
-                teamColorDot(performer.teamColor)
-                Text(performer.teamAbbreviation)
-                    .font(.system(size: 8))
-                    .foregroundStyle(.secondary)
-                if performer.isLive {
-                    Circle().fill(.red).frame(width: 3, height: 3)
+            Text(player.teamAbbreviation)
+                .font(.system(size: 7))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, alignment: .leading)
+
+            // Bar graph
+            GeometryReader { geo in
+                let barWidth = max(geo.size.width * CGFloat(player.statNumeric / max(maxVal, 1)), 4)
+                ZStack(alignment: .leading) {
+                    // Background track
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color.opacity(0.1))
+                        .frame(height: 10)
+
+                    // Filled bar
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.6), color],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: barWidth, height: 10)
                 }
             }
+            .frame(height: 10)
+
+            // Live indicator
+            if player.isLive {
+                Circle().fill(.red).frame(width: 3, height: 3)
+            }
+
+            // Value
+            Text(player.statValue)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
+                .frame(width: 22, alignment: .trailing)
+        }
+        .frame(height: 12)
+    }
+
+    // MARK: - Medium: stat column with vertical bars
+
+    private func statBarColumn(_ stat: StatCategory, count: Int) -> some View {
+        let players = entry.top(stat.key, count: count)
+        let maxVal = entry.maxValue(stat.key)
+
+        return VStack(spacing: 2) {
+            // Header
+            HStack(spacing: 2) {
+                Image(systemName: stat.icon).font(.system(size: 8)).foregroundStyle(stat.color)
+                Text(stat.label).font(.system(size: 8, weight: .heavy)).foregroundStyle(stat.color)
+            }
+
+            // Vertical bar chart
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(players) { player in
+                    VStack(spacing: 1) {
+                        // Value on top
+                        Text(player.statValue)
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(stat.color)
+
+                        // Vertical bar
+                        GeometryReader { geo in
+                            let barH = max(geo.size.height * CGFloat(player.statNumeric / max(maxVal, 1)), 4)
+                            VStack {
+                                Spacer(minLength: 0)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [stat.color.opacity(0.4), stat.color],
+                                            startPoint: .bottom,
+                                            endPoint: .top
+                                        )
+                                    )
+                                    .frame(height: barH)
+                            }
+                        }
+
+                        // Player name
+                        Text(player.playerName.components(separatedBy: " ").last ?? player.playerName)
+                            .font(.system(size: 6, weight: .medium))
+                            .lineLimit(1)
+
+                        teamDot(player.teamColor)
+
+                        if player.isLive {
+                            Circle().fill(.red).frame(width: 3, height: 3)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity)
     }
 
-    private func statSection(title: String, icon: String, color: Color, performers: [TopPerformer]) -> some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 8))
-                    .foregroundStyle(color)
-                Text(title.uppercased())
-                    .font(.system(size: 8, weight: .heavy))
-                    .foregroundStyle(color)
-                Spacer()
-            }
+    // MARK: - Mini bar (for small widget)
 
-            ForEach(Array(performers.enumerated()), id: \.element.id) { idx, performer in
-                HStack(spacing: 4) {
-                    Text("\(idx + 1)")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 12)
+    private func miniBar(value: Double, max maxVal: Double, color: Color, label: String) -> some View {
+        VStack(spacing: 1) {
+            Text("\(Int(value))")
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
 
-                    teamColorDot(performer.teamColor)
-
-                    Text(performer.playerName)
-                        .font(.system(size: 9, weight: .medium))
-                        .lineLimit(1)
-
-                    Text(performer.teamAbbreviation)
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    if performer.isLive {
-                        Circle().fill(.red).frame(width: 3, height: 3)
-                    }
-
-                    Text(performer.statValue)
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(color)
+            GeometryReader { geo in
+                let h = max(geo.size.height * CGFloat(value / max(maxVal, 1)), 2)
+                VStack {
+                    Spacer(minLength: 0)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(color.opacity(0.7))
+                        .frame(height: h)
                 }
-                .padding(.vertical, 1)
             }
+
+            Text(label)
+                .font(.system(size: 5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private func teamColorDot(_ hex: String?) -> some View {
-        Circle()
-            .fill(Color(hex: hex) ?? .gray)
-            .frame(width: 6, height: 6)
-    }
+    // MARK: - Helpers
 
-    private func colorForStat(_ stat: String) -> Color {
-        switch stat {
-        case "points": return .orange
-        case "rebounds": return .green
-        case "assists": return .purple
-        default: return .blue
-        }
+    private func teamDot(_ hex: String?) -> some View {
+        Circle().fill(Color(hex: hex) ?? .gray).frame(width: 5, height: 5)
     }
-
-    enum CardSize { case small, medium }
 }
 
 // MARK: - Color hex extension
@@ -428,22 +515,43 @@ private extension Color {
 // MARK: - Sample Data
 
 private let samplePerformers: [TopPerformer] = [
+    // Points
     TopPerformer(playerName: "C. Cooper", teamAbbreviation: "MSU", teamColor: "18453B",
-                 teamLogo: nil, headshotURL: nil, statName: "points",
-                 statDisplayName: "Pts", statValue: "28", statNumeric: 28, isLive: true),
-    TopPerformer(playerName: "J. Fears", teamAbbreviation: "MSU", teamColor: "18453B",
-                 teamLogo: nil, headshotURL: nil, statName: "assists",
-                 statDisplayName: "Ast", statValue: "11", statNumeric: 11, isLive: true),
-    TopPerformer(playerName: "T. Anderson", teamAbbreviation: "HPU", teamColor: "330072",
-                 teamLogo: nil, headshotURL: nil, statName: "rebounds",
-                 statDisplayName: "Reb", statValue: "11", statNumeric: 11, isLive: false),
+                 statName: "points", statDisplayName: "Pts", statValue: "28", statNumeric: 28, isLive: true),
     TopPerformer(playerName: "N. Boyd", teamAbbreviation: "WIS", teamColor: "C5050C",
-                 teamLogo: nil, headshotURL: nil, statName: "points",
-                 statDisplayName: "Pts", statValue: "27", statNumeric: 27, isLive: false),
+                 statName: "points", statDisplayName: "Pts", statValue: "27", statNumeric: 27, isLive: false),
     TopPerformer(playerName: "R. Martin", teamAbbreviation: "HPU", teamColor: "330072",
-                 teamLogo: nil, headshotURL: nil, statName: "points",
-                 statDisplayName: "Pts", statValue: "23", statNumeric: 23, isLive: false),
+                 statName: "points", statDisplayName: "Pts", statValue: "23", statNumeric: 23, isLive: false),
+    TopPerformer(playerName: "J. Flagg", teamAbbreviation: "DUKE", teamColor: "003087",
+                 statName: "points", statDisplayName: "Pts", statValue: "21", statNumeric: 21, isLive: false),
+    TopPerformer(playerName: "D. Knecht", teamAbbreviation: "TENN", teamColor: "FF8200",
+                 statName: "points", statDisplayName: "Pts", statValue: "19", statNumeric: 19, isLive: false),
+    // Rebounds
+    TopPerformer(playerName: "T. Anderson", teamAbbreviation: "HPU", teamColor: "330072",
+                 statName: "rebounds", statDisplayName: "Reb", statValue: "14", statNumeric: 14, isLive: false),
+    TopPerformer(playerName: "K. Ware", teamAbbreviation: "HOU", teamColor: "C8102E",
+                 statName: "rebounds", statDisplayName: "Reb", statValue: "12", statNumeric: 12, isLive: false),
+    TopPerformer(playerName: "A. Reeves", teamAbbreviation: "UK", teamColor: "0033A0",
+                 statName: "rebounds", statDisplayName: "Reb", statValue: "11", statNumeric: 11, isLive: false),
+    TopPerformer(playerName: "M. Miles", teamAbbreviation: "MSU", teamColor: "18453B",
+                 statName: "rebounds", statDisplayName: "Reb", statValue: "9", statNumeric: 9, isLive: true),
+    // Assists
+    TopPerformer(playerName: "J. Fears", teamAbbreviation: "MSU", teamColor: "18453B",
+                 statName: "assists", statDisplayName: "Ast", statValue: "11", statNumeric: 11, isLive: true),
     TopPerformer(playerName: "R. Martin", teamAbbreviation: "HPU", teamColor: "330072",
-                 teamLogo: nil, headshotURL: nil, statName: "assists",
-                 statDisplayName: "Ast", statValue: "10", statNumeric: 10, isLive: false),
+                 statName: "assists", statDisplayName: "Ast", statValue: "10", statNumeric: 10, isLive: false),
+    TopPerformer(playerName: "M. Sears", teamAbbreviation: "KU", teamColor: "0051BA",
+                 statName: "assists", statDisplayName: "Ast", statValue: "8", statNumeric: 8, isLive: false),
+    // Steals
+    TopPerformer(playerName: "T. Battle", teamAbbreviation: "ARK", teamColor: "9D2235",
+                 statName: "steals", statDisplayName: "Stl", statValue: "5", statNumeric: 5, isLive: false),
+    TopPerformer(playerName: "J. Fears", teamAbbreviation: "MSU", teamColor: "18453B",
+                 statName: "steals", statDisplayName: "Stl", statValue: "4", statNumeric: 4, isLive: true),
+    TopPerformer(playerName: "N. Boyd", teamAbbreviation: "WIS", teamColor: "C5050C",
+                 statName: "steals", statDisplayName: "Stl", statValue: "3", statNumeric: 3, isLive: false),
+    // Blocks
+    TopPerformer(playerName: "K. Ware", teamAbbreviation: "HOU", teamColor: "C8102E",
+                 statName: "blocks", statDisplayName: "Blk", statValue: "6", statNumeric: 6, isLive: false),
+    TopPerformer(playerName: "C. Cooper", teamAbbreviation: "MSU", teamColor: "18453B",
+                 statName: "blocks", statDisplayName: "Blk", statValue: "3", statNumeric: 3, isLive: true),
 ]
